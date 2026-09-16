@@ -1,0 +1,14 @@
+import { readFileSync, appendFileSync } from 'node:fs';
+import assert from 'node:assert/strict';
+const json = path => JSON.parse(readFileSync(path, 'utf8'));
+const version = json('package.json').version;
+assert.match(version, /^\d+\.\d+\.\d+$/);
+assert.equal(json('package-lock.json').version, version);
+assert.equal(json('package-lock.json').packages[''].version, version);
+assert.equal(json('src-tauri/tauri.conf.json').version, version);
+assert.equal(readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1], version);
+assert.equal(readFileSync('src-tauri/Cargo.lock', 'utf8').match(/name = "smbx"\r?\nversion = "([^"]+)"/)?.[1], version);
+const tag = `v${version}`;
+if (process.env.GITHUB_REF_TYPE === 'tag') assert.equal(process.env.GITHUB_REF_NAME, tag);
+if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\n`);
+console.log(`Validated ${tag}`);
