@@ -11,14 +11,24 @@ def license_name(name):
     return re.match(r'^(licen[cs]e|copying|copyright|notice|authors)', name, re.I)
 
 @lru_cache(maxsize=None)
+def read_url(url):
+    request = urllib.request.Request(url, headers={'User-Agent': 'SMB-X-license-review'})
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return response.read().decode('utf-8')
+
+@lru_cache(maxsize=None)
+def upstream_tree(repo, commit):
+    return json.loads(subprocess.check_output(
+        ['gh', 'api', f'repos/{repo}/git/trees/{commit}?recursive=1'], encoding='utf-8'))
+
+@lru_cache(maxsize=None)
 def upstream_licenses(repository, commit, package_path):
     match = re.match(r'https://github.com/([^/]+/[^/#]+)', repository or '')
     if not match:
         raise RuntimeError(f'Cannot locate missing license in {repository}')
     repo = match[1].removesuffix('.git')
     # Use the exact crate publication commit, never a changing default branch.
-    tree = json.loads(subprocess.check_output(
-        ['gh', 'api', f'repos/{repo}/git/trees/{commit}?recursive=1'], encoding='utf-8'))
+    tree = upstream_tree(repo, commit)
     if tree.get('truncated'):
         raise RuntimeError(f'Incomplete license tree for {repo}')
     parents = {'.', str(PurePosixPath(package_path))}
@@ -32,8 +42,7 @@ def upstream_licenses(repository, commit, package_path):
                 license_name(p.name) and str(p.parent) in parents for p in path.parents):
             continue
         url = f'https://raw.githubusercontent.com/{repo}/{commit}/{item["path"]}'
-        with urllib.request.urlopen(url, timeout=60) as response:
-            result.append((url, response.read().decode('utf-8')))
+        result.append((url, read_url(url)))
     if not result:
         raise RuntimeError(f'No upstream license found for {repo}@{commit}:{package_path}')
     return result
@@ -65,6 +74,7 @@ out = ['SMB X — Third-party notices',
        'Unmodified MPL-2.0 component sources are included in THIRD_PARTY_SOURCES.tar.gz.',
        'Source archives are also available at the version-specific crates.io URLs below.\n']
 missing = []
+errors = []
 expressions = set()
 for name, license_id, directory, explicit, crate in sorted(packages):
     if not license_id and not explicit:
@@ -83,16 +93,26 @@ for name, license_id, directory, explicit, crate in sorted(packages):
     if explicit:
         files.add(directory / explicit)
     if not files:
-        vcs_file = directory / '.cargo_vcs_info.json'
-        if not crate or not vcs_file.exists():
-            raise RuntimeError(f'License text unavailable: {name}')
-        vcs = json.loads(vcs_file.read_text(encoding='utf-8'))
-        for url, text in upstream_licenses(crate.get('repository'), vcs['git']['sha1'], vcs.get('path_in_vcs', '')):
-            out += [f'\n--- Upstream license: {url} ---', text]
-        missing.append(name)
+        try:
+            print(f'Recovering license: {name}', flush=True)
+            vcs_file = directory / '.cargo_vcs_info.json'
+            if not crate or not vcs_file.exists():
+                raise RuntimeError(f'License text unavailable: {name}')
+            vcs = json.loads(vcs_file.read_text(encoding='utf-8'))
+            repository = crate.get('repository')
+            if not repository:
+                info = json.loads(read_url(f'https://crates.io/api/v1/crates/{crate["name"]}/{crate["version"]}'))
+                repository = info['version'].get('repository') or info['version'].get('homepage')
+            for url, text in upstream_licenses(repository, vcs['git']['sha1'], vcs.get('path_in_vcs', '')):
+                out += [f'\n--- Upstream license: {url} ---', text]
+            missing.append(name)
+        except Exception as exc:
+            errors.append(f'{name}: {exc}')
     for f in sorted(files):
         out += [f'\n--- {f.relative_to(directory).as_posix()} ---',
                 f.read_text(encoding='utf-8', errors='replace')]
+if errors:
+    raise RuntimeError('Unresolved license notices:\n' + '\n'.join(errors))
 (root / 'THIRD_PARTY_NOTICES.txt').write_text('\n'.join(out) + '\n', encoding='utf-8')
 with tarfile.open(root / 'THIRD_PARTY_SOURCES.tar.gz', 'w:gz') as archive:
     for p, directory in mpl_sources:
