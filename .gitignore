@@ -36,4 +36,5 @@ DerivedData/
 *.bak
 release-assets/
 THIRD_PARTY_NOTICES.txt
+THIRD_PARTY_SOURCES.tar.gz
 /SMB X 公共仓库发布与 GitHub Actions 自动构建需求.md
