@@ -1,0 +1,175 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - id: version
+        run: node scripts/check-version.mjs
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  build:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            platform: macOS-arm64
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            platform: Windows-x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      CARGO_INCREMENTAL: '0'
+      BUILD_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Prepare Rust
+        shell: bash
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('src-tauri/Cargo.lock', 'src-tauri/Cargo.toml') }}
+      - run: npm ci
+      - run: npm run build
+      - name: Collect third-party licenses
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/third-party-notices.py
+      - name: Test Rust
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+      - name: Build macOS DMG
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg -- --locked
+      - name: Verify macOS bundle and package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          dmg=(src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
+          test "${#dmg[@]}" -eq 1
+          hdiutil verify "${dmg[0]}"
+          mount="$RUNNER_TEMP/smb-x-dmg"
+          hdiutil attach "${dmg[0]}" -nobrowse -mountpoint "$mount"
+          ditto "$mount/SMB X.app" "$RUNNER_TEMP/SMB X.app"
+          hdiutil detach "$mount"
+          app="$RUNNER_TEMP/SMB X.app"
+          codesign --verify --deep --strict "$app"
+          file "$app/Contents/MacOS/smbx" | grep arm64
+          "$app/Contents/MacOS/smbx" > "$RUNNER_TEMP/smb-x-launch.log" 2>&1 &
+          pid=$!
+          sleep 12
+          if ! kill -0 "$pid" 2>/dev/null; then cat "$RUNNER_TEMP/smb-x-launch.log"; exit 1; fi
+          kill "$pid"
+          cp "${dmg[0]}" "release-assets/SMB-X-${RELEASE_TAG}-macOS-arm64.dmg"
+          cp THIRD_PARTY_NOTICES.txt release-assets/THIRD-PARTY-macOS-arm64.txt
+          cp THIRD_PARTY_SOURCES.tar.gz release-assets/THIRD-PARTY-SOURCES-macOS-arm64.tar.gz
+      - name: Build Windows portable executable
+        if: runner.os == 'Windows'
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc --no-bundle -- --locked
+      - name: Package and smoke-test Windows ZIP
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = 'src-tauri/target/x86_64-pc-windows-msvc/release'
+          New-Item -ItemType Directory -Force build/SMB-X, release-assets | Out-Null
+          Copy-Item "$release/smbx.exe" 'build/SMB-X/SMB X.exe'
+          Get-ChildItem "$release/*.dll" | Copy-Item -Destination build/SMB-X
+          Copy-Item README.md, LICENSE, THIRD_PARTY_NOTICES.txt, THIRD_PARTY_SOURCES.tar.gz build/SMB-X
+          Compress-Archive -Path build/SMB-X -DestinationPath "release-assets/SMB-X-$env:RELEASE_TAG-Windows-x64.zip"
+          Expand-Archive -Path "release-assets/SMB-X-$env:RELEASE_TAG-Windows-x64.zip" -DestinationPath build/smoke
+          $process = Start-Process -FilePath 'build/smoke/SMB-X/SMB X.exe' -PassThru -WindowStyle Hidden
+          Start-Sleep -Seconds 12
+          if ($process.HasExited) { throw "App exited during launch smoke test: $($process.ExitCode)" }
+          Stop-Process -Id $process.Id
+          Copy-Item THIRD_PARTY_NOTICES.txt release-assets/THIRD-PARTY-Windows-x64.txt
+          Copy-Item THIRD_PARTY_SOURCES.tar.gz release-assets/THIRD-PARTY-SOURCES-Windows-x64.tar.gz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SMB-X-${{ env.RELEASE_TAG }}-${{ matrix.platform }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: SMB-X-${{ env.RELEASE_TAG }}-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify both assets and create checksums
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          test -s "SMB-X-${RELEASE_TAG}-macOS-arm64.dmg"
+          test -s "SMB-X-${RELEASE_TAG}-Windows-x64.zip"
+          sha256sum *.dmg *.zip THIRD-PARTY-*.txt THIRD-PARTY-SOURCES-*.tar.gz > SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SMB-X-${{ env.RELEASE_TAG }}-complete
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish complete release from version tag
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A failed upload remains a draft; an incomplete release is never public.
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            test "$(jq -r .isDraft release-state.json)" = true
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "SMB X $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md
+          fi
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest
