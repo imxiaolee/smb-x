@@ -85,9 +85,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          app='src-tauri/target/aarch64-apple-darwin/release/bundle/macos/SMB X.app'
-          codesign --verify --deep --strict "$app"
-          file "$app/Contents/MacOS/smbx" | grep arm64
           dmg=(src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg)
           test "${#dmg[@]}" -eq 1
           hdiutil verify "${dmg[0]}"
@@ -95,7 +92,10 @@ jobs:
           hdiutil attach "${dmg[0]}" -nobrowse -mountpoint "$mount"
           ditto "$mount/SMB X.app" "$RUNNER_TEMP/SMB X.app"
           hdiutil detach "$mount"
-          "$RUNNER_TEMP/SMB X.app/Contents/MacOS/smbx" > "$RUNNER_TEMP/smb-x-launch.log" 2>&1 &
+          app="$RUNNER_TEMP/SMB X.app"
+          codesign --verify --deep --strict "$app"
+          file "$app/Contents/MacOS/smbx" | grep arm64
+          "$app/Contents/MacOS/smbx" > "$RUNNER_TEMP/smb-x-launch.log" 2>&1 &
           pid=$!
           sleep 12
           if ! kill -0 "$pid" 2>/dev/null; then cat "$RUNNER_TEMP/smb-x-launch.log"; exit 1; fi

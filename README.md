@@ -55,7 +55,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml
 npm run tauri dev
 ```
 
-`npm run dev` 仅提供带示例数据的前端预览；真实文件操作需要运行 Tauri。许可证收集命令需要 Python 3，首次会让 Cargo 下载锁定的依赖。npm 与 Cargo 依赖均提交锁文件。
+`npm run dev` 仅提供带示例数据的前端预览；真实文件操作需要运行 Tauri。许可证收集命令需要 Python 3 和 GitHub CLI，首次会让 Cargo 下载锁定的依赖，并联网读取对应固定提交的上游许可证。npm 与 Cargo 依赖均提交锁文件。
 
 ### GitHub Actions 发布
 
@@ -140,4 +140,4 @@ macOS：应用菜单 → 设置…（Cmd+,）→ 语言；Windows：标题栏设
 
 ## 许可证与第三方组件
 
-本项目采用 [MIT License](LICENSE)。主要依赖包括 Tauri（MIT / Apache-2.0）、smb2、keyring 和 Lucide；各组件遵守自己的许可证。构建时从锁定的依赖源码收集许可文本，随安装包与 Release 附件分发。详细审查范围见 [发布检查记录](docs/OPEN_SOURCE_REVIEW.md)。
+本项目采用 [MIT License](LICENSE)。主要依赖包括 Tauri（MIT / Apache-2.0）、smb2、keyring 和 Lucide；各组件遵守自己的许可证。构建时从锁定的依赖源码收集许可文本，随安装包与 Release 附件分发。MPL-2.0 组件的未修改源码另附于 `THIRD_PARTY_SOURCES.tar.gz`，其源文件继续适用 MPL。详细审查范围见 [发布检查记录](docs/OPEN_SOURCE_REVIEW.md)。

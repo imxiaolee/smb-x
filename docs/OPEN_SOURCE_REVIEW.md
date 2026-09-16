@@ -22,7 +22,8 @@
 - 项目按维护者要求采用 MIT；根目录提供完整 LICENSE。
 - 未直接复制第三方源码进入项目。Tauri、Rust crates、Lucide 等以锁文件依赖引入。
 - `scripts/third-party-notices.py` 从 Cargo 依赖元数据和已安装 npm 包收集声明、LICENSE / COPYING / NOTICE / AUTHORS 等文本。包含构建和测试依赖，范围可能大于最终二进制；清单随各平台包和 Release 附件发布。
-- 依赖许可表达式和未包含单独许可文件的组件会出现在构建日志中，首次构建需核对；不能仅凭项目 MIT 标签推定依赖都采用 MIT。
+- 已核对构建日志中的许可表达式：主要为 MIT、Apache-2.0、BSD、ISC、Zlib、Unicode 与 MPL-2.0，没有必须采用 GPL / AGPL / LGPL 的目标平台依赖。双许可组件保留原声明。
+- 未随 crate 附带许可证的组件，从其发布元数据对应的 GitHub 固定提交补齐；任何无法取得的许可文本会阻止发布。MPL 组件 cssparser、cssparser-macros、dtoa-short、option-ext、selectors 的未修改源码随包和 Release 附件提供，保留源文件许可声明。
 
 ## 验证记录与限制
 
