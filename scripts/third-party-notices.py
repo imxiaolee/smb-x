@@ -1,5 +1,6 @@
 """Collect declared licenses and bundled notices from the locked dependency sources."""
 import json
+import os
 import re
 import subprocess
 import tarfile
@@ -48,13 +49,18 @@ def upstream_licenses(repository, commit, package_path):
     return result
 
 root = Path(__file__).resolve().parent.parent
+target = os.environ.get('BUILD_TARGET')
+if not target:
+    rustc = subprocess.check_output(['rustc', '-vV'], encoding='utf-8')
+    target = re.search(r'^host: (.+)$', rustc, re.M)[1]
 metadata = json.loads(subprocess.check_output(
-    ['cargo', 'metadata', '--locked', '--format-version', '1', '--manifest-path',
+    ['cargo', 'metadata', '--locked', '--format-version', '1', '--filter-platform', target, '--manifest-path',
      str(root / 'src-tauri/Cargo.toml')], cwd=root, encoding='utf-8'))
+resolved = {node['id'] for node in metadata['resolve']['nodes']}
 packages = []
 mpl_sources = []
 for p in metadata['packages']:
-    if p['source'] is not None:
+    if p['source'] is not None and p['id'] in resolved:
         directory = Path(p['manifest_path']).parent
         if 'MPL-2.0' in (p.get('license') or ''):
             mpl_sources.append((p, directory))
@@ -92,6 +98,19 @@ for name, license_id, directory, explicit, crate in sorted(packages):
                 files.update(x for x in f.rglob('*') if x.is_file())
     if explicit:
         files.add(directory / explicit)
+    if not files and license_id == 'MPL-2.0':
+        # MPL uses source-file notices. Preserve those sources in the accompanying
+        # archive and include the standard license text supplied by another MPL crate.
+        for other, other_dir in mpl_sources:
+            alternatives = [f for f in other_dir.iterdir() if f.is_file() and license_name(f.name)]
+            if alternatives:
+                for f in alternatives:
+                    out += [f'Standard MPL text from {other["name"]}/{f.name}:', f.read_text(encoding='utf-8')]
+                out.append('Original source-file notices are preserved in THIRD_PARTY_SOURCES.tar.gz.')
+                break
+        else:
+            raise RuntimeError(f'MPL text unavailable: {name}')
+        continue
     if not files:
         try:
             print(f'Recovering license: {name}', flush=True)
