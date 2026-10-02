@@ -25,6 +25,7 @@ jobs:
           cache: npm
       - id: version
         run: node scripts/check-version.mjs
+      - run: test -s RELEASE_NOTES.md
       - run: npm ci
       - run: npm test
       - run: npm run build
@@ -169,7 +170,7 @@ jobs:
           if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
             test "$(jq -r .isDraft release-state.json)" = true
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "SMB X $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "SMB X $RELEASE_TAG" --notes-file RELEASE_NOTES.md
           fi
           gh release upload "$RELEASE_TAG" release-assets/* --clobber
           gh release edit "$RELEASE_TAG" --draft=false --latest
