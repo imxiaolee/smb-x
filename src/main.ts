@@ -3,9 +3,10 @@ import './style.css';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
-import { createElement, Folder, File, Server as ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2 } from 'lucide';
-import { type Location, type Entry, type Settings, type Server, type Task, child, parent, sortEntries, type, bytes, virtualRange, address, parseAddress, terminal, favoritesFor, resizeColumns, ROW_HEIGHT } from './core';
-const icons = { Folder, File, ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2 };
+import { createElement, Folder, File, Server as ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2, Search } from 'lucide';
+import { type Location, type Entry, type Settings, type Server, type Task, child, parent, sortEntries, filterEntries, type, bytes, virtualRange, address, parseAddress, terminal, favoritesFor, resizeColumns, ROW_HEIGHT } from './core';
+import { dropDestination, handleNativeDrop } from './drag-drop';
+const icons = { Folder, File, ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2, Search };
 type Icon = keyof typeof icons;
 function icon(name: Icon) { const el = createElement(icons[name]); el.setAttribute('aria-hidden', 'true'); return el; }
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text?: string): HTMLElementTagNameMap[K] { const e = document.createElement(tag); e.className = cls; if (text !== undefined)
@@ -30,10 +31,6 @@ let tasks: Task[] = [];
 let clipboard: {
     sources: Location[];
     moving: boolean;
-} | null = null;
-let drag: {
-    pane: number;
-    sources: Location[];
 } | null = null;
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const main = el('main', 'main');
@@ -427,6 +424,10 @@ class Pane {
     pathInput = el('input', 'address');
     addressBar = el('div', 'address-bar');
     breadcrumbs = el('div', 'breadcrumbs');
+    searchInput = el('input', 'name-search');
+    searchBar = el('div', 'search-bar');
+    searchButton = button(tr('搜索名称'), 'Search', () => this.toggleSearch());
+    suppressClickUntil = 0;
     subtitle = el('span', 'pane-subtitle');
     counter = el('div', 'pane-footer');
     loading = el('div', 'pane-message');
@@ -475,7 +476,19 @@ class Pane {
                 this.renderAddress(); this.viewport.focus();
             }
         };
-        nav.append(this.back, this.forward, button(tr("上级目录"), 'ArrowUp', () => void this.navigate(parent(this.location))), this.addressBar, button(tr("刷新"), 'RefreshCw', () => void this.refresh()));
+        this.searchButton.setAttribute('aria-expanded', 'false');
+        this.searchInput.type = 'search';
+        this.searchInput.placeholder = tr('搜索当前目录名称');
+        this.searchInput.setAttribute('aria-label', tr('搜索当前目录名称'));
+        this.searchInput.spellcheck = false;
+        this.searchInput.oninput = () => this.applySearch();
+        this.searchInput.onkeydown = e => {
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.toggleSearch(false); this.viewport.focus(); }
+            if (e.key === 'Enter') { e.preventDefault(); this.viewport.focus(); }
+        };
+        this.searchBar.hidden = true;
+        this.searchBar.append(icon('Search'), this.searchInput, button(tr('关闭搜索'), 'X', () => { this.toggleSearch(false); this.viewport.focus(); }));
+        nav.append(this.back, this.forward, button(tr("上级目录"), 'ArrowUp', () => void this.navigate(parent(this.location))), this.addressBar, this.searchButton, button(tr("刷新"), 'RefreshCw', () => void this.refresh()));
         nav.onsubmit = e => { e.preventDefault(); void attempt(async () => {
             const location = parseAddress(this.pathInput.value, settings.servers, home);
             this.renderAddress(); this.viewport.focus();
@@ -541,28 +554,10 @@ class Pane {
             this.renderRows();
         } };
         this.viewport.oncontextmenu = e => { e.preventDefault(); this.activate(); menu(e.clientX, e.clientY, this.actions()); };
-        this.viewport.ondragover = e => { if (drag && drag.pane !== this.id && !this.busy) {
-            e.preventDefault();
-            e.dataTransfer!.dropEffect = 'copy';
-            this.root.classList.add('drop-target');
-        } };
-        this.viewport.ondragleave = e => { if (!this.viewport.contains(e.relatedTarget as Node))
-            this.root.classList.remove('drop-target'); };
-        this.viewport.ondrop = e => {
-            e.preventDefault();
-            this.root.classList.remove('drop-target');
-            if (!drag || drag.pane === this.id || this.busy)
-                return;
-            const row = (e.target as HTMLElement).closest<HTMLElement>('.file-row');
-            const entry = row ? this.sorted[Number(row.dataset.index)] : undefined;
-            const target = entry?.isDir ? child(this.location, entry.name) : this.location;
-            void transfer(drag.sources, target, false);
-            drag = null;
-        };
         this.root.onpointerdown = () => this.activate();
         this.loading.setAttribute('role', 'status');
         this.loading.hidden = true;
-        this.root.append(heading, nav, columns, this.viewport, this.loading, this.counter);
+        this.root.append(heading, nav, this.searchBar, columns, this.viewport, this.loading, this.counter);
         this.renderPlaces();
         this.activate();
     }
@@ -635,6 +630,7 @@ class Pane {
     }
     async navigate(loc: Location, historyIndex?: number, refresh = false) {
         const request = ++this.request;
+        let loaded = false;
         this.busy = true;
         this.loading.hidden = false;
         this.loading.textContent = tr("正在读取目录\u2026");
@@ -643,6 +639,7 @@ class Pane {
             const entries = await ipc<Entry[]>('list', { location: loc });
             if (request !== this.request)
                 return;
+            if (loc.connection !== this.location.connection || loc.path !== this.location.path) this.searchInput.value = '';
             this.location = { ...loc };
             this.entries = entries;
             this.selection.clear();
@@ -662,8 +659,7 @@ class Pane {
             this.viewport.scrollTop = 0;
             this.anchor = 0;
             this.resort();
-            this.loading.hidden = entries.length > 0;
-            this.loading.textContent = tr("空文件夹");
+            loaded = true;
         }
         catch (e) {
             if (request === this.request) {
@@ -676,13 +672,90 @@ class Pane {
             if (request === this.request) {
                 this.busy = false;
                 this.root.classList.remove('is-loading');
+                if (loaded) this.renderEmpty();
             }
         }
     }
     refresh() { return this.navigate(this.location, undefined, true); }
     async travel(delta: number) { const i = this.index + delta; if (i >= 0 && i < this.history.length)
         await this.navigate(this.history[i], i); }
-    resort() { this.sorted = sortEntries(this.entries, this.sort, this.direction); this.renderRows(); }
+    resort() {
+        this.sorted = sortEntries(filterEntries(this.entries, this.searchInput.value), this.sort, this.direction);
+        this.searchButton.classList.toggle('active', !!this.searchInput.value.trim());
+        const visible = new Set(this.sorted.map(entry => entry.name));
+        this.selection = new Set([...this.selection].filter(name => visible.has(name)));
+        this.anchor = Math.max(0, Math.min(this.anchor, this.sorted.length - 1));
+        this.renderRows();
+        if (!this.busy) this.renderEmpty();
+    }
+    renderEmpty() {
+        this.loading.hidden = this.sorted.length > 0;
+        this.loading.textContent = this.searchInput.value.trim() ? tr('没有匹配的名称') : tr('空文件夹');
+    }
+    applySearch() { this.viewport.scrollTop = 0; this.anchor = 0; this.resort(); }
+    toggleSearch(open = this.searchBar.hidden) {
+        this.activate();
+        this.searchBar.hidden = !open;
+        this.searchButton.setAttribute('aria-expanded', String(open));
+        if (open) { this.searchInput.focus(); this.searchInput.select(); }
+        else { this.searchInput.value = ''; this.applySearch(); }
+    }
+    renderCounter() {
+        const count = this.searchInput.value.trim() ? tr('{0} / {1} 个项目', this.sorted.length.toLocaleString(), this.entries.length.toLocaleString()) : tr('{0} 个项目', this.entries.length.toLocaleString());
+        this.counter.textContent = count + (this.selection.size ? tr(' · 已选 {0} 项', this.selection.size) : '');
+    }
+    beginDrag(event: PointerEvent, entry: Entry) {
+        if (event.button !== 0 || event.pointerType === 'touch' || entry.isLink || this.busy || modalOpen) return;
+        const request = this.request;
+        let sources: Location[] | null = null;
+        let badge: HTMLElement | null = null;
+        const move = (e: PointerEvent) => {
+            if (e.pointerId !== event.pointerId) return;
+            if (request !== this.request || this.busy || modalOpen) { finish(); return; }
+            if (!sources) {
+                if (Math.hypot(e.clientX - event.clientX, e.clientY - event.clientY) < 6) return;
+                if (!this.selection.has(entry.name)) { this.selection = new Set([entry.name]); this.renderSelection(); }
+                sources = this.selected();
+                badge = el('div', 'drag-badge', tr('{0} 个项目', sources.length));
+                document.body.append(badge);
+                document.body.classList.add('file-dragging');
+            }
+            e.preventDefault();
+            this.suppressClickUntil = performance.now() + 250;
+            badge!.style.left = `${e.clientX + 12}px`;
+            badge!.style.top = `${e.clientY + 12}px`;
+            clearDropHighlights();
+            const target = dropTargetAt(e.clientX, e.clientY);
+            if (target && target.pane !== this && dropDestination(target)) highlightDrop(target);
+        };
+        const finish = () => {
+            document.removeEventListener('pointermove', move);
+            document.removeEventListener('pointerup', up);
+            document.removeEventListener('pointercancel', cancel);
+            document.removeEventListener('keydown', escape);
+            window.removeEventListener('blur', finish);
+            badge?.remove();
+            document.body.classList.remove('file-dragging');
+            clearDropHighlights();
+            if (sources) this.suppressClickUntil = performance.now() + 250;
+        };
+        const up = (e: PointerEvent) => {
+            if (e.pointerId !== event.pointerId) return;
+            const target = dropTargetAt(e.clientX, e.clientY);
+            const destination = target && target.pane !== this && request === this.request && !this.busy && dropDestination(target);
+            finish();
+            if (sources && destination) { e.preventDefault(); target!.pane.activate(); void transfer(sources, destination, false); }
+        };
+        const cancel = (e: PointerEvent) => { if (e.pointerId === event.pointerId) finish(); };
+        const escape = (e: KeyboardEvent) => { if (e.key === 'Escape') finish(); };
+        // Native file drops intercept HTML5 DnD in WebView2, so internal drags
+        // use pointer events on both platforms and remain independent of it.
+        document.addEventListener('pointermove', move, { passive: false });
+        document.addEventListener('pointerup', up);
+        document.addEventListener('pointercancel', cancel);
+        document.addEventListener('keydown', escape);
+        window.addEventListener('blur', finish);
+    }
     selected() { return this.sorted.filter(e => this.selection.has(e.name)).map(e => child(this.location, e.name)); }
     editAddress() {
         if (!this.pathInput.hidden) return;
@@ -748,7 +821,6 @@ class Pane {
             const entry = this.sorted[i];
             const row = el('div', 'file-row' + (this.selection.has(entry.name) ? ' selected' : ''));
             row.dataset.index = String(i);
-            row.draggable = !entry.isLink;
             row.setAttribute('role', 'option');
             row.setAttribute('aria-selected', String(this.selection.has(entry.name)));
             row.title = entry.name;
@@ -757,6 +829,7 @@ class Pane {
             name.append(icon(entry.isLink ? 'Link' : entry.isDir ? 'Folder' : 'File'), el('span', '', entry.name));
             row.append(name, el('span', 'file-type', type(entry)), el('span', 'file-size', entry.isDir ? '—' : bytes(entry.size)), el('span', 'file-date', entry.modified ? new Date(entry.modified * 1000).toLocaleString(language === 'zh' ? 'zh-CN' : 'en-US', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'));
             row.onclick = e => {
+                if (performance.now() < this.suppressClickUntil) return;
                 if (e.shiftKey) {
                     const from = Math.min(i, this.anchor);
                     const to = Math.max(i, this.anchor);
@@ -775,18 +848,13 @@ class Pane {
                 }
                 this.renderSelection();
             };
-            row.ondblclick = () => void this.open(entry);
+            row.ondblclick = () => { if (performance.now() >= this.suppressClickUntil) void this.open(entry); };
             row.oncontextmenu = e => { e.preventDefault(); e.stopPropagation(); if (!this.selection.has(entry.name))
                 this.selection = new Set([entry.name]); this.renderSelection(); menu(e.clientX, e.clientY, this.actions()); };
-            row.ondragstart = e => { if (!this.selection.has(entry.name))
-                this.selection = new Set([entry.name]); drag = { pane: this.id, sources: this.selected() }; e.dataTransfer!.effectAllowed = 'copy'; e.dataTransfer!.setData('text/plain', tr("{0} 个项目", this.selection.size)); };
-            row.ondragend = () => { drag = null; document.querySelectorAll('.drop-target').forEach(e => e.classList.remove('drop-target')); };
-            row.ondragover = () => { if (drag?.pane !== this.id && entry.isDir)
-                row.classList.add('folder-drop'); };
-            row.ondragleave = () => row.classList.remove('folder-drop');
+            row.onpointerdown = e => this.beginDrag(e, entry);
             this.rows.append(row);
         }
-        this.counter.textContent = tr("{0} 个项目{1}", this.entries.length.toLocaleString(), this.selection.size ? tr(" \u00B7 已选 {0} 项", this.selection.size) : '');
+        this.renderCounter();
     }
     renderSelection() {
         for (const row of this.rows.querySelectorAll<HTMLElement>('.file-row')) {
@@ -794,7 +862,7 @@ class Pane {
             row.classList.toggle('selected', selected);
             row.setAttribute('aria-selected', String(selected));
         }
-        this.counter.textContent = tr("{0} 个项目{1}", this.entries.length.toLocaleString(), this.selection.size ? tr(" \u00B7 已选 {0} 项", this.selection.size) : '');
+        this.renderCounter();
     }
     async open(entry: Entry) {
         if (this.busy)
@@ -877,6 +945,23 @@ class Pane {
     }
 }
 const panes = [new Pane(0), new Pane(1)];
+function clearDropHighlights() {
+    document.querySelectorAll('.drop-target, .folder-drop').forEach(element => element.classList.remove('drop-target', 'folder-drop'));
+}
+function dropTargetAt(x: number, y: number) {
+    if (modalOpen) return null;
+    const element = document.elementFromPoint(x, y);
+    if (!element) return null;
+    const pane = panes.find(pane => pane.viewport.contains(element) || pane.loading.contains(element));
+    if (!pane) return null;
+    const row = element.closest<HTMLElement>('.file-row');
+    const entry = row ? pane.sorted[Number(row.dataset.index)] : undefined;
+    return { pane, row, entry, location: pane.location, busy: pane.busy };
+}
+function highlightDrop(target: NonNullable<ReturnType<typeof dropTargetAt>>) {
+    target.pane.root.classList.add('drop-target');
+    if (target.entry?.isDir) target.row?.classList.add('folder-drop');
+}
 async function transfer(sources: Location[], destination: Location, moving: boolean) {
     if (!sources.length)
         return;
@@ -1011,19 +1096,28 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
         document.querySelector('.context-menu')?.remove();
         setQueue(false);
+        if (!modalOpen && !panes[active].searchBar.hidden) {
+            e.preventDefault();
+            panes[active].toggleSearch(false);
+            panes[active].viewport.focus();
+        }
         return;
     }
     if (modalOpen || (e.target as HTMLElement).closest('input,textarea'))
         return;
     const pane = panes[active];
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'l') {
+    if (mod && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        pane.toggleSearch(true);
+    }
+    else if (mod && e.key.toLowerCase() === 'l') {
         e.preventDefault();
         pane.editAddress();
     }
     else if (mod && e.key.toLowerCase() === 'a') {
         e.preventDefault();
-        pane.selection = new Set(pane.entries.map(x => x.name));
+        pane.selection = new Set(pane.sorted.map(x => x.name));
         pane.renderRows();
     }
     else if (mod && ['c', 'x'].includes(e.key.toLowerCase())) {
@@ -1083,6 +1177,12 @@ document.addEventListener('keydown', e => {
 });
 async function start() {
     if (isTauri()) {
+        await getCurrentWindow().onDragDropEvent(({ payload }) => handleNativeDrop(payload, window.devicePixelRatio || 1, {
+            clear: clearDropHighlights,
+            target: dropTargetAt,
+            highlight: highlightDrop,
+            transfer: (sources, destination) => void transfer(sources, destination, false),
+        }));
         await listen('open-settings', () => void showSettings());
         await ipc('configure_menu', { english: language === 'en' });
     }

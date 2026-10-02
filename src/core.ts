@@ -77,6 +77,10 @@ export function sortEntries(entries: Entry[], key: 'name' | 'size' | 'modified' 
         return direction * (diff || a.name.localeCompare(b.name, language === 'zh' ? 'zh-CN' : 'en-US', { numeric: true }));
     });
 }
+export function filterEntries(entries: Entry[], query: string): Entry[] {
+    const needle = query.trim().normalize('NFC').toLowerCase();
+    return needle ? entries.filter(entry => entry.name.normalize('NFC').toLowerCase().includes(needle)) : entries;
+}
 export const type = (e: Entry) => e.isLink ? tr("符号链接") : e.isDir ? tr("文件夹") : e.name.includes('.') ? e.name.split('.').pop()!.toUpperCase() + tr(" 文件") : tr("文件");
 export function bytes(n: number): string {
     if (!Number.isFinite(n) || n <= 0)

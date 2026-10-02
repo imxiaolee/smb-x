@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parent, child, sortEntries, virtualRange, parseAddress, address, favoritesFor, resizeColumns, type Favorite, type Server } from './core';
+import { parent, child, sortEntries, filterEntries, virtualRange, parseAddress, address, favoritesFor, resizeColumns, type Favorite, type Server } from './core';
 describe('paths', () => {
   it('keeps filesystem and share roots', () => {
     expect(parent({ connection: null, path: 'C:\\' }).path).toBe('C:\\');
@@ -36,5 +36,22 @@ describe('column resizing', () => {
   it('stops when either neighboring column reaches its minimum width', () => {
     expect(resizeColumns([100, 83, 64, 125], 0, -40)).toEqual([95, 88, 64, 125]);
     expect(resizeColumns([240, 83, 64, 125], 2, 100)).toEqual([240, 83, 99, 90]);
+  });
+});
+describe('name search', () => {
+  const entries = ['Documents', '项目说明.PDF', 'README.md', 'Café.txt'].map(name => ({ name, isDir: name === 'Documents', size: 0, modified: null, isLink: false }));
+  it('matches substrings without case sensitivity and trims the query', () => {
+    expect(filterEntries(entries, '  .pdf ').map(e => e.name)).toEqual(['项目说明.PDF']);
+    expect(filterEntries(entries, 'doc').map(e => e.name)).toEqual(['Documents']);
+    expect(filterEntries(entries, '说明').map(e => e.name)).toEqual(['项目说明.PDF']);
+  });
+  it('matches decomposed macOS filenames and treats punctuation literally', () => {
+    expect(filterEntries(entries, 'Cafe\u0301').map(e => e.name)).toEqual(['Café.txt']);
+    expect(filterEntries(entries, '*')).toEqual([]);
+  });
+  it('restores all entries for an empty query without modifying the directory list', () => {
+    expect(filterEntries(entries, 'missing')).toEqual([]);
+    expect(filterEntries(entries, ' ').length).toBe(4);
+    expect(entries.length).toBe(4);
   });
 });

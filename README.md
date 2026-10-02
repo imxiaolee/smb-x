@@ -8,12 +8,19 @@
 
 * 双栏浏览本地文件与 SMB 共享
 * 支持上传、下载、复制、移动和跨栏拖拽
+* 支持按名称筛选当前目录，以及从 Finder / Explorer 直接拖入文件和文件夹
 * 支持 SMB2/3、自定义端口、Domain 和共享枚举
 * 支持服务器及目录收藏
 * 支持传输进度、速度、取消、失败重试和同名文件处理
 * 密码可安全保存在 macOS Keychain / Windows Credential Manager
 * 支持简体中文、English 和跟随系统
 * 基于 Tauri 2，使用系统 WebView，无需内置 Chromium
+
+## 搜索与拖入
+
+点击每栏地址栏旁的搜索图标，或按 Cmd/Ctrl + F，按名称实时筛选当前目录。不区分大小写，支持部分名称；不递归搜索。Esc 或关闭按钮清除筛选，全选仅选择显示的结果，切换目录会清空搜索词。
+
+从 Finder / Explorer 拖入本机或 NAS 栏：空白处复制到当前目录，文件夹行复制到该子目录。支持多文件和文件夹，源文件保留，同名冲突在传输队列中确认。目录读取中、弹窗和符号链接目标不接收拖入。
 
 ## 下载
 
@@ -102,7 +109,7 @@ Windows 构建需要 Visual Studio 的 **Desktop development with C++** 工作�
 * 目前仅提供 Apple Silicon 版 macOS 应用
 * macOS / Windows 安装包目前均未进行正式代码签名
 * 不支持 SMB1
-* 暂不支持 Kerberos SSO、SMB 自动发现、文件同步和搜索
+* 暂不支持 Kerberos SSO、SMB 自动发现、文件同步和递归搜索
 
 
 ## License
