@@ -4,7 +4,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
 import { createElement, Folder, File, Server as ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2, Search } from 'lucide';
-import { type Location, type Entry, type Settings, type Server, type Task, child, parent, sortEntries, filterEntries, type, bytes, virtualRange, address, parseAddress, terminal, favoritesFor, resizeColumns, ROW_HEIGHT } from './core';
+import { type Location, type Entry, type Settings, type Server, type Task, child, parent, sortEntries, filterEntries, initialMatch, type, bytes, virtualRange, address, parseAddress, terminal, favoritesFor, resizeColumns, ROW_HEIGHT } from './core';
 import { dropDestination, handleNativeDrop } from './drag-drop';
 const icons = { Folder, File, ServerIcon, HardDrive, ArrowLeft, ArrowRight, ArrowUp, RefreshCw, Plus, Star, X, MoreHorizontal, ArrowRightLeft, CircleCheck, Check, CircleAlert, LoaderCircle, Copy, Trash2, Pencil, FolderPlus, Download, Link, Settings2, Search };
 type Icon = keyof typeof icons;
@@ -1103,11 +1103,25 @@ document.addEventListener('keydown', e => {
         }
         return;
     }
-    if (modalOpen || (e.target as HTMLElement).closest('input,textarea'))
+    if (e.defaultPrevented || e.isComposing || modalOpen || (e.target as HTMLElement).closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'))
         return;
     const pane = panes[active];
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'f') {
+    if (!mod && !e.altKey && /^[a-z]$/i.test(e.key) && !pane.busy && !document.querySelector('.context-menu')) {
+        const current = pane.selection.has(pane.sorted[pane.anchor]?.name) ? pane.anchor : -1;
+        const index = initialMatch(pane.sorted, e.key, current);
+        if (index < 0) return;
+        e.preventDefault();
+        pane.anchor = index;
+        pane.selection = new Set([pane.sorted[index].name]);
+        const y = index * ROW_HEIGHT;
+        if (y < pane.viewport.scrollTop) pane.viewport.scrollTop = y;
+        if (y + ROW_HEIGHT > pane.viewport.scrollTop + pane.viewport.clientHeight)
+            pane.viewport.scrollTop = y + ROW_HEIGHT - pane.viewport.clientHeight;
+        pane.viewport.focus({ preventScroll: true });
+        pane.renderRows();
+    }
+    else if (mod && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         pane.toggleSearch(true);
     }

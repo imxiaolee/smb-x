@@ -81,6 +81,17 @@ export function filterEntries(entries: Entry[], query: string): Entry[] {
     const needle = query.trim().normalize('NFC').toLowerCase();
     return needle ? entries.filter(entry => entry.name.normalize('NFC').toLowerCase().includes(needle)) : entries;
 }
+export function initialMatch(entries: Entry[], letter: string, current = -1): number {
+    if (!/^[a-z]$/i.test(letter)) return -1;
+    const matches = (index: number) => entries[index]?.name.toLowerCase().startsWith(letter.toLowerCase());
+    // A different initial starts at the top; the same initial cycles in display order.
+    const start = matches(current) ? current + 1 : 0;
+    for (let offset = 0; offset < entries.length; offset++) {
+        const index = (start + offset) % entries.length;
+        if (matches(index)) return index;
+    }
+    return -1;
+}
 export const type = (e: Entry) => e.isLink ? tr("符号链接") : e.isDir ? tr("文件夹") : e.name.includes('.') ? e.name.split('.').pop()!.toUpperCase() + tr(" 文件") : tr("文件");
 export function bytes(n: number): string {
     if (!Number.isFinite(n) || n <= 0)

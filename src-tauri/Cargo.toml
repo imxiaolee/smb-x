@@ -1,6 +1,6 @@
 [package]
 name = "smbx"
-version = "1.0.1"
+version = "1.0.2"
 license = "MIT"
 description = "Lightweight dual-pane SMB file manager for macOS and Windows"
 edition = "2021"

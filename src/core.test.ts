@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parent, child, sortEntries, filterEntries, virtualRange, parseAddress, address, favoritesFor, resizeColumns, type Favorite, type Server } from './core';
+import { parent, child, sortEntries, filterEntries, initialMatch, virtualRange, parseAddress, address, favoritesFor, resizeColumns, type Favorite, type Server } from './core';
 describe('paths', () => {
   it('keeps filesystem and share roots', () => {
     expect(parent({ connection: null, path: 'C:\\' }).path).toBe('C:\\');
@@ -53,5 +53,27 @@ describe('name search', () => {
     expect(filterEntries(entries, 'missing')).toEqual([]);
     expect(filterEntries(entries, ' ').length).toBe(4);
     expect(entries.length).toBe(4);
+  });
+});
+
+describe('initial-letter navigation', () => {
+  const entries = ['Archive', 'Documents', 'apple.txt', 'backup.zip', 'AX.txt'].map(name => ({ name, isDir: !name.includes('.'), size: 0, modified: null, isLink: false }));
+  it('selects the first matching initial, ignoring case and substrings', () => {
+    expect(initialMatch(entries, 'a')).toBe(0);
+    expect(initialMatch(entries, 'B', 0)).toBe(3);
+    expect(initialMatch(entries, 'r')).toBe(-1);
+  });
+  it('cycles through folders and files in display order and wraps around', () => {
+    expect(initialMatch(entries, 'A', 0)).toBe(2);
+    expect(initialMatch(entries, 'a', 2)).toBe(4);
+    expect(initialMatch(entries, 'a', 4)).toBe(0);
+    expect(initialMatch(entries, 'd', 1)).toBe(1);
+  });
+  it('uses only the displayed results, including items beyond the virtual window', () => {
+    expect(initialMatch(filterEntries(entries, '.txt'), 'a')).toBe(0);
+    const many = Array.from({ length: 1000 }, () => entries[1]);
+    expect(initialMatch([...many, entries[0]], 'a')).toBe(1000);
+    expect(initialMatch([], 'a')).toBe(-1);
+    expect(initialMatch(entries, 'Enter')).toBe(-1);
   });
 });
