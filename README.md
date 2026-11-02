@@ -1,6 +1,6 @@
 # SMB X <sub><sup>[Homepage](https://mac.xiaolee.com/smbx/)</sup></sub>
 
-[简体中文](README.zh-CN.md) | English
+English | [简体中文](README.zh-CN.md)
 
 A lightweight, straightforward dual-pane SMB file manager for macOS and Windows.
 
