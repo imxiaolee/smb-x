@@ -1,4 +1,4 @@
-# SMB X
+# SMB X · [Homepage](https://mac.xiaolee.com/smbx/)
 
 [简体中文](README.md) | English
 
